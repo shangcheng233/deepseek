@@ -1,0 +1,2 @@
+# deepseek
+自用 
