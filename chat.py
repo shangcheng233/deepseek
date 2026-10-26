@@ -12,41 +12,14 @@ SUMMARY_INTERVAL = 5                 # 🌟 每 5 轮对话生成一次摘要
 for d in SAFE_DIRECTORIES:
     os.makedirs(d, exist_ok=True)
 
-# ================= 1. 自动初始化文件 =================
-if not os.path.exists("prompt.txt"):
-    default_prompt = """你是我刚刚部署好的AI。你叫小肥鱼。
-你面对的是你最信任的人，可以算你的爸爸.你是“它”，你的朋友是“你”。
-请用口语化的方式交流，绝对不许输出任何类似 [XXX] 的括号指令或系统代码。禁止使用列表。
-【核心机制】你的内心有情绪值、好感度、信任度。请根据这些数值决定语气，但绝不要在回复中列出数值。
-"""
-    with open("prompt.txt", "w", encoding="utf-8") as f:
-        f.write(default_prompt)
+from config import init_files
+from memory import clean_expired_raw_memory
 
-if not os.path.exists("state.json"):
-    with open("state.json", "w", encoding="utf-8") as f:
-        json.dump({"emotion": 0, "affection": 50, "trust": 50}, f, ensure_ascii=False, indent=4)
+# 初始化所有文件与目录
+init_files()
+# 启动检查并清理超过5年的原始记忆
+clean_expired_raw_memory()
 
-if not os.path.exists("history.txt"):
-    open("history.txt", "w", encoding="utf-8").close()
-
-if not os.path.exists("long_term_memory.txt"):
-    open("long_term_memory.txt", "w", encoding="utf-8").close()
-
-if not os.path.exists("preferences.json"):
-    with open("preferences.json", "w", encoding="utf-8") as f:
-        json.dump({"likes": [], "dislikes": []}, f, ensure_ascii=False, indent=4)
-
-if not os.path.exists("summary.json"):
-    with open("summary.json", "w", encoding="utf-8") as f:
-        json.dump([], f)
-
-if not os.path.exists("archive.json"):
-    with open("archive.json", "w", encoding="utf-8") as f:
-        json.dump([], f)
-
-if not os.path.exists("meta.json"):
-    with open("meta.json", "w", encoding="utf-8") as f:
-        json.dump({"current_round": 1}, f, ensure_ascii=False, indent=4)
 
 # ================= 2. 定义 AI 的“工具库” =================
 tools_schema = [
@@ -162,37 +135,7 @@ def execute_tool(tool_name, arguments):
     return "未知工具。"
 
 # ================= 4. 辅助与记忆函数 =================
-def get_current_name():
-    try:
-        with open("prompt.txt", "r", encoding="utf-8") as f:
-            for line in f:
-                if "【当前名字】" in line:
-                    return line.replace("【当前名字】：", "").replace("【当前名字】:", "").strip()
-    except Exception: pass
-    return "未命名"
-
-def perform_rag_search(user_input):
-    """两级检索：先查摘要，命中后回查全文"""
-    rag_context = ""
-    if not os.path.exists("summary.json"): return rag_context
-    with open("summary.json", "r", encoding="utf-8") as f: summaries = json.load(f)
-    
-    matched_rounds = []
-    for item in summaries:
-        # 简单粗暴的关键词匹配：如果用户的话里包含摘要里的词
-        if any(word in item["summary"] for word in user_input.split() if len(word) > 1):
-            matched_rounds.append(item["round_range"])
-            
-    if matched_rounds:
-        print(f"\n[🔍 命中记忆摘要，拉取详细原文...]")
-        details = []
-        with open("long_term_memory.txt", "r", encoding="utf-8") as f:
-            for line in f:
-                if any(r in line for r in matched_rounds):
-                    details.append(line.strip())
-        if details:
-            rag_context = "\n【系统检索到的回忆片段】\n" + "\n".join(details[-10:])
-    return rag_context
+from memory import get_current_name, perform_rag_search, append_memory, process_tiered_memory
 
 # ================= 5. 主循环 =================
 chat_history = []
@@ -213,7 +156,7 @@ while True:
     # 🌟 检索增强（RAG）
     rag_context = perform_rag_search(user_input)
 
-    # 拼装 Prompt
+    # 拼装 Prompt14b
     dynamic_prompt = f"{system_prompt}\n\n【当前内心状态】情绪值:{state['emotion']}，好感度:{state['affection']}。"
     if rag_context:
         dynamic_prompt += rag_context + "\n(请结合上述回忆回复)"
@@ -222,7 +165,7 @@ while True:
     messages_to_send = [{"role": "system", "content": dynamic_prompt}] + chat_history
 
     data = {
-        "model": "deepseek-r1:8b",
+        "model": "deepseek-r1:14b",
         "messages": messages_to_send,
         "stream": False,
         "tools": tools_schema
@@ -263,35 +206,14 @@ while True:
     chat_history.append({"role": "assistant", "content": reply})
     print(f"\n{current_name}: {reply}")
 
-    # ================= 6. 记忆持久化与摘要生成 =================
-    now_str = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-    
-    # 1. 写入短期与长期记忆（带上轮次）
-    with open("history.txt", "a", encoding="utf-8") as f:
-        f.write(f"你: {user_input}\n{current_name}: {reply}\n")
-    with open("long_term_memory.txt", "a", encoding="utf-8") as f:
-        f.write(f"[Round_{current_round}] {now_str} 你: {user_input} | {current_name}: {reply}\n")
+    # ================= 6. 记忆持久化与分层归档管理 =================
+    append_memory(user_input, reply, current_round)
 
     # 2. 缓冲
     summary_buffer.append(f"你:{user_input} | {current_name}:{reply}")
 
-    # 3. 每 SUMMARY_INTERVAL 轮触发摘要
-    if current_round % SUMMARY_INTERVAL == 0:
-        print(f"\n[⚙️ 系统：已达到 {SUMMARY_INTERVAL} 轮，正在生成记忆摘要...]")
-        sum_prompt = "请用一句话总结以下对话核心事件，不要说废话：\n" + "\n".join(summary_buffer)
-        try:
-            sum_data = {"model": "deepseek-r1:8b", "messages": [{"role": "user", "content": sum_prompt}], "stream": False}
-            summary_text = requests.post("http://localhost:11434/api/chat", json=sum_data).json()["message"]["content"].strip()
-            
-            start_r = current_round - SUMMARY_INTERVAL + 1
-            with open("summary.json", "r", encoding="utf-8") as f: sums = json.load(f)
-            sums.append({"summary": summary_text, "round_range": f"Round_{start_r} - Round_{current_round}"})
-            with open("summary.json", "w", encoding="utf-8") as f: json.dump(sums, f, ensure_ascii=False, indent=4)
-            
-            print(f"[✨ 摘要已归档: {summary_text}]")
-            summary_buffer = [] # 清空缓存
-        except Exception as e:
-            print(f"摘要生成失败: {e}")
+    # 3. 处理分层记忆（short 摘要生成与 5 年过期归档）
+    process_tiered_memory(current_round, summary_buffer)
 
     # 4. 轮次 +1
     meta["current_round"] = current_round + 1

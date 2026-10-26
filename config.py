@@ -3,9 +3,15 @@ import json
 
 SAFE_DIRECTORY = "D:\\AI_Workspace"
 SUMMARY_INTERVAL = 5
+NOW_LIMIT = 20
+DAY_LIMIT = 30
+MONTH_LIMIT = 12
+YEAR_LIMIT = 5
+ARCHIVE_DAYS = 1825
 
 def init_files():
     os.makedirs(SAFE_DIRECTORY, exist_ok=True)
+    os.makedirs("old", exist_ok=True)
 
     if not os.path.exists("prompt.txt"):
         default_prompt = """你是我刚刚部署好的AI。你叫小肥鱼。
@@ -24,24 +30,21 @@ def init_files():
         with open("state.json", "w", encoding="utf-8") as f:
             json.dump({"emotion": 0, "affection": 50, "trust": 50}, f, ensure_ascii=False, indent=4)
 
-    if not os.path.exists("history.txt"):
-        open("history.txt", "w", encoding="utf-8").close()
+    # 检查并全新创建 now.json、day.json、month.json、year.json
+    for json_file in ["now.json", "day.json", "month.json", "year.json"]:
+        if not os.path.exists(json_file):
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump([], f, ensure_ascii=False, indent=4)
 
-    if not os.path.exists("long_term_memory.txt"):
-        open("long_term_memory.txt", "w", encoding="utf-8").close()
+    # raw_memory.txt 检查创建
+    if not os.path.exists("raw_memory.txt"):
+        open("raw_memory.txt", "w", encoding="utf-8").close()
 
     if not os.path.exists("preferences.json"):
         with open("preferences.json", "w", encoding="utf-8") as f:
             json.dump({"likes": [], "dislikes": []}, f, ensure_ascii=False, indent=4)
 
-    if not os.path.exists("summary.json"):
-        with open("summary.json", "w", encoding="utf-8") as f:
-            json.dump([], f)
-
-    if not os.path.exists("archive.json"):
-        with open("archive.json", "w", encoding="utf-8") as f:
-            json.dump([], f)
-
     if not os.path.exists("meta.json"):
         with open("meta.json", "w", encoding="utf-8") as f:
             json.dump({"current_round": 1}, f, ensure_ascii=False, indent=4)
+
