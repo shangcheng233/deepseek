@@ -1,1 +1,6 @@
-[]
+[
+    {
+        "summary": "用户请求查看 A:\\测试\\111.txt 文件内容，助手准备使用 read_file 工具来读取该文件。",
+        "round_range": "Round_1 - Round_5"
+    }
+]

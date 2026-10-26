@@ -7,9 +7,10 @@ import shutil
 from datetime import datetime
 
 # ================= 0. 全局配置 =================
-SAFE_DIRECTORY = "D:\\AI_Workspace"  # 🌟 你的文件安全沙盒，请确保盘符存在
+SAFE_DIRECTORIES = ["A:", ]  # 🌟 你的多个文件安全沙盒路径列表
 SUMMARY_INTERVAL = 5                 # 🌟 每 5 轮对话生成一次摘要
-os.makedirs(SAFE_DIRECTORY, exist_ok=True)
+for d in SAFE_DIRECTORIES:
+    os.makedirs(d, exist_ok=True)
 
 # ================= 1. 自动初始化文件 =================
 if not os.path.exists("prompt.txt"):
@@ -54,7 +55,7 @@ tools_schema = [
     {"type": "function", "function": {"name": "update_persona_setting", "description": "当性格发生变化，追加写入人设。", "parameters": {"type": "object", "properties": {"new_setting": {"type": "string"}}, "required": ["new_setting"]}}},
     {"type": "function", "function": {"name": "remember_preference", "description": "记录用户的喜好或厌恶。", "parameters": {"type": "object", "properties": {"preference_type": {"type": "string", "enum": ["like", "dislike"]}, "content": {"type": "string"}}, "required": ["preference_type", "content"]}}},
     {"type": "function", "function": {"name": "list_files", "description": "查看安全区内的文件列表。", "parameters": {"type": "object", "properties": {"directory": {"type": "string", "description": "子目录，默认为空"}}}}},
-    {"type": "function", "function": {"name": "read_file", "description": "读取安全区内文件的文本。", "parameters": {"type": "object", "properties": {"filepath": {"type": "string"}}, "required": ["filepath"]}}},
+    {"type": "function", "function": {"name": "read_file", "description": "【必须调用】读取指定路径文件的文本内容。当你被要求查看、读取或检查文件时，必须立刻调用此工具。", "parameters": {"type": "object", "properties": {"filepath": {"type": "string", "description": "文件的路径，例如 A:\\测试\\111.txt"}}, "required": ["filepath"]}}},
     {"type": "function", "function": {"name": "write_file", "description": "在安全区内新建或覆盖写入文件。", "parameters": {"type": "object", "properties": {"filepath": {"type": "string"}, "content": {"type": "string"}}, "required": ["filepath", "content"]}}},
     {"type": "function", "function": {"name": "delete_file", "description": "删除安全区内的文件。", "parameters": {"type": "object", "properties": {"filepath": {"type": "string"}}, "required": ["filepath"]}}}
 ]
@@ -62,7 +63,7 @@ tools_schema = [
 # ================= 3. 工具执行与安全沙盒 =================
 def is_safe_path(target_path):
     abs_path = os.path.abspath(target_path)
-    return abs_path.startswith(SAFE_DIRECTORY)
+    return any(abs_path.startswith(os.path.abspath(d)) for d in SAFE_DIRECTORIES)
 
 def execute_tool(tool_name, arguments):
     try:
@@ -94,25 +95,65 @@ def execute_tool(tool_name, arguments):
 
         # --- 文件操作系列 ---
         elif tool_name == "list_files":
-            full_path = os.path.join(SAFE_DIRECTORY, arguments.get("directory", ""))
-            if not is_safe_path(full_path): return "拒绝：越权操作！"
-            return f"目录内容：{', '.join(os.listdir(full_path))}"
+            sub_dir = arguments.get("directory", "")
+            # 如果指定了绝对路径或包含盘符，尝试直接组合；否则检查各个沙盒
+            target_path = arguments.get("filepath") or sub_dir
+            # 支持在多个沙盒中查找或指定子目录
+            results = []
+            for base_d in SAFE_DIRECTORIES:
+                full_path = os.path.join(base_d, sub_dir)
+                if os.path.exists(full_path) and is_safe_path(full_path):
+                    try:
+                        results.append(f"[{base_d}]: {', '.join(os.listdir(full_path))}")
+                    except Exception:
+                        pass
+            if results:
+                return "目录内容：\n" + "\n".join(results)
+            return "拒绝：目录不存在或越权操作！"
 
         elif tool_name == "read_file":
-            filepath = os.path.join(SAFE_DIRECTORY, arguments.get("filepath"))
-            if not is_safe_path(filepath): return "拒绝：越权操作！"
+            req_path = arguments.get("filepath")
+            filepath = None
+            for base_d in SAFE_DIRECTORIES:
+                p = os.path.join(base_d, req_path)
+                if os.path.exists(p) and is_safe_path(p):
+                    filepath = p
+                    break
+            if not filepath:
+                # 尝试直接判断是否是绝对路径且安全
+                if os.path.exists(req_path) and is_safe_path(req_path):
+                    filepath = req_path
+            if not filepath or not is_safe_path(filepath): return "拒绝：文件不存在或越权操作！"
             with open(filepath, "r", encoding="utf-8") as f: return f.read()[:2000]
 
         elif tool_name == "write_file":
-            filepath = os.path.join(SAFE_DIRECTORY, arguments.get("filepath"))
+            req_path = arguments.get("filepath")
+            # 默认写入第一个沙盒，或者如果req_path带了绝对路径/相对某个沙盒存在则用对应沙盒
+            filepath = None
+            for base_d in SAFE_DIRECTORIES:
+                p = os.path.join(base_d, req_path)
+                if is_safe_path(p):
+                    filepath = p
+                    break
+            if not filepath:
+                filepath = os.path.join(SAFE_DIRECTORIES[0], req_path)
             if not is_safe_path(filepath): return "拒绝：越权操作！"
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
             with open(filepath, "w", encoding="utf-8") as f: f.write(arguments.get("content", ""))
             return f"文件已写入：{filepath}"
 
         elif tool_name == "delete_file":
-            filepath = os.path.join(SAFE_DIRECTORY, arguments.get("filepath"))
-            if not is_safe_path(filepath): return "拒绝：越权操作！"
+            req_path = arguments.get("filepath")
+            filepath = None
+            for base_d in SAFE_DIRECTORIES:
+                p = os.path.join(base_d, req_path)
+                if os.path.exists(p) and is_safe_path(p):
+                    filepath = p
+                    break
+            if not filepath:
+                if os.path.exists(req_path) and is_safe_path(req_path):
+                    filepath = req_path
+            if not filepath or not is_safe_path(filepath): return "拒绝：文件不存在或越权操作！"
             os.remove(filepath)
             return f"文件已删除：{filepath}"
 
@@ -215,6 +256,9 @@ while True:
         current_name = get_current_name()
     else:
         reply = message["content"]
+
+    # 过滤掉回复中形如 (...)、[...] 的心理活动、动作动作或工具说明
+    reply = re.sub(r'\（.*?\）|\(.*?\)|\[.*?\]', '', reply).strip()
 
     chat_history.append({"role": "assistant", "content": reply})
     print(f"\n{current_name}: {reply}")
